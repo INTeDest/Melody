@@ -1,0 +1,258 @@
+name: Melody Server Compilation
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Архитектура для сборки'
+        required: true
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - both
+      build_mode:
+        description: 'Режим компиляции'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - debug
+          - release
+      build_type:
+        description: 'Тип сборки'
+        required: true
+        default: 'ultra-performance'
+        type: choice
+        options:
+          - normal
+          - minimal
+          - full
+          - ultra-performance
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-amd64:
+    name: Build for Linux amd64 (${{ inputs.build_type }})
+    runs-on: ubuntu-latest
+    if: inputs.arch == 'amd64' || inputs.arch == 'both'
+    
+    steps:
+    - name: Free Disk Space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        swap-storage: true
+    
+    - name: Show disk space
+      run: df -h
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          clang \
+          libclang-dev \
+          llvm-dev \
+          libc6-dev
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: x86_64-unknown-linux-gnu
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: amd64-${{ inputs.build_mode }}-${{ inputs.build_type }}-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Set build flags
+      run: |
+        if [ "${{ inputs.build_type }}" = "ultra-performance" ]; then
+          # БЕЗ LTO - так как некоторые крейты его не поддерживают
+          echo "RUSTFLAGS=-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C debuginfo=0" >> $GITHUB_ENV
+          echo "✓ Ultra-performance mode: max speed, no LTO"
+        elif [ "${{ inputs.build_type }}" = "minimal" ]; then
+          echo "RUSTFLAGS=-C opt-level=z -C target-cpu=native -C debuginfo=0" >> $GITHUB_ENV
+          echo "✓ Minimal size mode"
+        elif [ "${{ inputs.build_type }}" = "full" ]; then
+          echo "RUSTFLAGS=-C target-cpu=native -C debuginfo=1" >> $GITHUB_ENV
+          echo "✓ Full debug mode"
+        else
+          echo "RUSTFLAGS=-C target-cpu=native -C debuginfo=0" >> $GITHUB_ENV
+          echo "✓ Normal mode"
+        fi
+
+    - name: Build
+      run: |
+        if [ "${{ inputs.build_mode }}" = "release" ]; then
+          cargo build --release --target x86_64-unknown-linux-gnu
+          BIN_PATH="target/x86_64-unknown-linux-gnu/release/conduit"
+        else
+          cargo build --target x86_64-unknown-linux-gnu
+          BIN_PATH="target/x86_64-unknown-linux-gnu/debug/conduit"
+        fi
+        echo "BIN_PATH=$BIN_PATH" >> $GITHUB_ENV
+
+    - name: Strip binary (release only)
+      if: inputs.build_mode == 'release'
+      run: strip "${{ env.BIN_PATH }}" || true
+
+    - name: Create build info
+      run: |
+        cat > build-info.txt << EOF
+        Build Date: $(date -u)
+        Commit: ${{ github.sha }}
+        Architecture: amd64
+        Mode: ${{ inputs.build_mode }}
+        Type: ${{ inputs.build_type }}
+        Rust Flags: ${{ env.RUSTFLAGS }}
+        EOF
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: matrix-server-amd64-${{ inputs.build_mode }}-${{ inputs.build_type }}
+        path: |
+          ${{ env.BIN_PATH }}
+          build-info.txt
+        retention-days: 30
+
+  build-arm64:
+    name: Build for Linux arm64 (${{ inputs.build_type }})
+    runs-on: ubuntu-latest
+    if: inputs.arch == 'arm64' || inputs.arch == 'both'
+    
+    steps:
+    - name: Free Disk Space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        large-packages: true
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          clang \
+          libclang-dev \
+          llvm-dev \
+          libc6-dev \
+          gcc-aarch64-linux-gnu \
+          g++-aarch64-linux-gnu \
+          binutils-aarch64-linux-gnu \
+          libc6-dev-arm64-cross
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: aarch64-unknown-linux-gnu
+
+    - name: Configure for cross-compilation
+      run: |
+        mkdir -p .cargo
+        echo '[target.aarch64-unknown-linux-gnu]' > .cargo/config.toml
+        echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: arm64-${{ inputs.build_mode }}-${{ inputs.build_type }}-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Set build flags
+      run: |
+        if [ "${{ inputs.build_type }}" = "ultra-performance" ]; then
+          echo "RUSTFLAGS=-C target-cpu=generic -C opt-level=3 -C codegen-units=1 -C debuginfo=0" >> $GITHUB_ENV
+        elif [ "${{ inputs.build_type }}" = "minimal" ]; then
+          echo "RUSTFLAGS=-C opt-level=z -C target-cpu=generic -C debuginfo=0" >> $GITHUB_ENV
+        elif [ "${{ inputs.build_type }}" = "full" ]; then
+          echo "RUSTFLAGS=-C target-cpu=generic -C debuginfo=1" >> $GITHUB_ENV
+        else
+          echo "RUSTFLAGS=-C target-cpu=generic -C debuginfo=0" >> $GITHUB_ENV
+        fi
+
+    - name: Build
+      run: |
+        if [ "${{ inputs.build_mode }}" = "release" ]; then
+          cargo build --release --target aarch64-unknown-linux-gnu
+          BIN_PATH="target/aarch64-unknown-linux-gnu/release/conduit"
+        else
+          cargo build --target aarch64-unknown-linux-gnu
+          BIN_PATH="target/aarch64-unknown-linux-gnu/debug/conduit"
+        fi
+        echo "BIN_PATH=$BIN_PATH" >> $GITHUB_ENV
+
+    - name: Strip binary
+      if: inputs.build_mode == 'release'
+      run: aarch64-linux-gnu-strip "${{ env.BIN_PATH }}" || true
+
+    - name: Create build info
+      run: |
+        cat > build-info.txt << EOF
+        Build Date: $(date -u)
+        Commit: ${{ github.sha }}
+        Architecture: arm64
+        Mode: ${{ inputs.build_mode }}
+        Type: ${{ inputs.build_type }}
+        Rust Flags: ${{ env.RUSTFLAGS }}
+        EOF
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: matrix-server-arm64-${{ inputs.build_mode }}-${{ inputs.build_type }}
+        path: |
+          ${{ env.BIN_PATH }}
+          build-info.txt
+        retention-days: 30
+
+  summary:
+    name: Build Summary
+    needs: [build-amd64, build-arm64]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Display results
+      run: |
+        echo "========================================="
+        echo "Build Summary"
+        echo "========================================="
+        echo "Architecture: ${{ inputs.arch }}"
+        echo "Build Mode: ${{ inputs.build_mode }}"
+        echo "Build Type: ${{ inputs.build_type }}"
+        echo "========================================="
+        echo "AMD64: ${{ needs.build-amd64.result }}"
+        echo "ARM64: ${{ needs.build-arm64.result }}"
+        echo "========================================="
