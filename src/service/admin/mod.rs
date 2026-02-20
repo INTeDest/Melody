@@ -45,7 +45,7 @@ use ruma::{
     room_version_rules::RoomVersionRules,
     EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedMxcUri, OwnedRoomAliasId, OwnedRoomId,
     OwnedServerName, OwnedUserId, RoomAliasId, RoomId, RoomVersionId, ServerName, UserId,
-    uint,
+    
 };
 use serde_json::value::to_raw_value;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -972,12 +972,12 @@ impl Service {
                 services().account_data.update(
                     None,
                     &user_id,
-                    ruma::events::GlobalAccountDataEventType::PushRules
+                    GlobalAccountDataEventType::PushRules
                         .to_string()
                         .into(),
                     &serde_json::to_value(ruma::events::push_rules::PushRulesEvent {
                         content: ruma::events::push_rules::PushRulesEventContent {
-                            global: ruma::push::Ruleset::server_default(&user_id),
+                            global: push::Ruleset::server_default(&user_id),
                         },
                     })
                     .expect("to json value always works"),
@@ -1781,8 +1781,8 @@ impl Service {
             let state_lock = mutex_state.lock().await;
             
             // Используем новое имя [BANNED] в событии бана
-            let ban_content = ruma::events::room::member::RoomMemberEventContent {
-                membership: ruma::events::room::member::MembershipState::Ban,
+            let ban_content = RoomMemberEventContent {
+                membership: MembershipState::Ban,
                 displayname: Some(BANNED_DISPLAY_NAME.to_string()), // Используем константу
                 avatar_url,
                 is_direct: None,
@@ -2178,7 +2178,7 @@ impl Service {
         analysis.push_str(&format!("Комната: {}\n", pdu.room_id()));
         analysis.push_str(&format!("Время: {} UTC\n", 
             DateTime::from_timestamp(
-                (pdu.origin_server_ts.as_u64() / 1000).try_into().unwrap_or(0),
+                (pdu.origin_server_ts.get() / 1000).try_into().unwrap_or(0),
                 0
             ).map(|dt| dt.to_string()).unwrap_or_else(|| "неизвестно".to_string())
         ));
@@ -2261,13 +2261,13 @@ impl Service {
             .expect("room exists");
         
         // Удаляем PDUs
-        let mut prefix = shortroomid.to_be_bytes().to_vec();
+        let prefix = shortroomid.to_be_bytes().to_vec();
         for (pdu_id, _) in services().rooms.timeline.pdus_until(
             services().globals.server_user(),
             &room_id,
             PduCount::max()
         )?.filter_map(|r| r.ok()) {
-            let pdu_id_bytes = match pdu_id {
+            let _pdu_id_bytes = match pdu_id {
                 PduCount::Normal(c) => {
                     let mut id = prefix.clone();
                     id.extend_from_slice(&c.to_be_bytes());
@@ -2307,7 +2307,7 @@ impl Service {
         }
         
         // Заставляем пользователя покинуть все комнаты
-        client_server::leave_all_rooms(&user_id).await?;
+        leave_all_rooms(&user_id).await?;
         
         // Деактивируем аккаунт (это удалит устройства и токены)
         services().users.deactivate_account(&user_id)?;
@@ -2396,7 +2396,7 @@ impl Service {
         )))
     }
     
-    async fn handle_setavatar(&self, login: String, body: Vec<&str>) -> Result<RoomMessageEventContent> {
+    async fn handle_setavatar(&self, login: String, _body: Vec<&str>) -> Result<RoomMessageEventContent> {
         let user_id = self.parse_user_id(&login)?;
         
         if !services().users.exists(&user_id)? {
