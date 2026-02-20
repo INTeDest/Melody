@@ -1736,7 +1736,7 @@ impl Service {
     }
     
     // Реализация новых команд
-        
+            
     async fn handle_ban(&self, login: String) -> Result<RoomMessageEventContent> {
         let user_id = self.parse_user_id(&login)?;
         
@@ -1783,11 +1783,11 @@ impl Service {
             // Используем новое имя [BANNED] в событии бана
             let ban_content = RoomMemberEventContent {
                 membership: MembershipState::Ban,
-                displayname: Some(BANNED_DISPLAY_NAME.to_string()), // Используем константу
-                avatar_url,
+                displayname: Some(BANNED_DISPLAY_NAME.to_string()),
+                avatar_url: avatar_url.clone(),  // Добавлен .clone()
                 is_direct: None,
                 third_party_invite: None,
-                blurhash,
+                blurhash: blurhash.clone(),      // Добавлен .clone()
                 reason: Some("Забанен администратором".to_string()),
                 join_authorized_via_users_server: None,
             };
@@ -1816,8 +1816,7 @@ impl Service {
             "Пользователь {} забанен во всех комнатах и переименован в [BANNED]", 
             user_id
         )))
-    }
-    
+    }    
     // Улучшенная версия handle_unban
     async fn handle_unban(&self, login: String) -> Result<RoomMessageEventContent> {
         let user_id = self.parse_user_id(&login)?;
@@ -1942,8 +1941,16 @@ impl Service {
         
         services().users.set_displayname(&user_id, Some(new_name.clone()))?;
         
+        // Собираем комнаты в Vec перед циклом
+        let rooms: Vec<_> = services()
+            .rooms
+            .state_cache
+            .rooms_joined(&user_id)
+            .filter_map(|r| r.ok())
+            .collect();
+        
         // Отправляем обновления во все комнаты
-        for room_id in services().rooms.state_cache.rooms_joined(&user_id).filter_map(|r| r.ok()) {
+        for room_id in rooms {
             let mutex_state = Arc::clone(
                 services()
                     .globals
@@ -2003,8 +2010,16 @@ impl Service {
         services().users.set_avatar_url(&user_id, None)?;
         services().users.set_blurhash(&user_id, None)?;
         
+        // Собираем комнаты в Vec перед циклом
+        let rooms: Vec<_> = services()
+            .rooms
+            .state_cache
+            .rooms_joined(&user_id)
+            .filter_map(|r| r.ok())
+            .collect();
+        
         // Отправляем обновления во все комнаты
-        for room_id in services().rooms.state_cache.rooms_joined(&user_id).filter_map(|r| r.ok()) {
+        for room_id in rooms {
             let mutex_state = Arc::clone(
                 services()
                     .globals
