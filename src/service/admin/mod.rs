@@ -1775,7 +1775,7 @@ impl Service {
                     .roomid_mutex_state
                     .write()
                     .await
-                    .entry(room_id.as_ref().to_owned())
+                    .entry(room_id.clone().into())
                     .or_default(),
             );
             let state_lock = mutex_state.lock().await;
@@ -1853,7 +1853,7 @@ impl Service {
                                 .roomid_mutex_state
                                 .write()
                                 .await
-                                .entry(room_id.as_ref().to_owned())
+                                .entry(room_id.clone().into())
                                 .or_default(),
                         );
                         let state_lock = mutex_state.lock().await;
@@ -1950,7 +1950,7 @@ impl Service {
                     .roomid_mutex_state
                     .write()
                     .await
-                    .entry(room_id.as_ref().to_owned())
+                    .entry(room_id.clone().into())
                     .or_default(),
             );
             let state_lock = mutex_state.lock().await;
@@ -2011,7 +2011,7 @@ impl Service {
                     .roomid_mutex_state
                     .write()
                     .await
-                    .entry(room_id.as_ref().to_owned())
+                    .entry(room_id.clone().into())
                     .or_default(),
             );
             let state_lock = mutex_state.lock().await;
@@ -2073,7 +2073,7 @@ impl Service {
                 .roomid_mutex_state
                 .write()
                 .await
-                .entry(room_id.as_ref().to_owned())
+                .entry(room_id.clone().into())
                 .or_default(),
         );
         let state_lock = mutex_state.lock().await;
@@ -2178,7 +2178,7 @@ impl Service {
         analysis.push_str(&format!("Комната: {}\n", pdu.room_id()));
         analysis.push_str(&format!("Время: {} UTC\n", 
             DateTime::from_timestamp(
-                (pdu.origin_server_ts.get() / 1000).try_into().unwrap_or(0),
+                (u64::from(pdu.origin_server_ts) / 1000).try_into().unwrap_or(0),
                 0
             ).map(|dt| dt.to_string()).unwrap_or_else(|| "неизвестно".to_string())
         ));
