@@ -1,3 +1,21 @@
+// Modified by github.com/INTeDest, 2026 // Licensed under Apache 2.0
+use ruma::{
+    push::{self, Ruleset},
+    events::{
+        GlobalAccountDataEventType,
+        room::{
+            member::RoomMemberEventContent,
+            message::FileMessageEventContent,
+        },
+    },
+    OwnedMxcUri,
+    uint,
+};
+use crate::service::rooms::timeline::PduCount;
+
+// Константа для имени забаненного пользователя
+const BANNED_DISPLAY_NAME: &str = "[BANNED]";
+
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -56,7 +74,7 @@ use super::{
 
 #[cfg_attr(test, derive(Debug))]
 #[derive(Parser)]
-#[command(name = "@conduit:server.name:", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "@.:server.name:", version = env!("CARGO_PKG_VERSION"))]
 enum AdminCommand {
     #[command(verbatim_doc_comment)]
     /// Register an appservice using its registration YAML
@@ -363,6 +381,94 @@ enum AdminCommand {
     /// Parses a JSON object as an event then creates a hash and signs it, putting a room
     /// version as an argument, and the json in a codeblock
     HashAndSignEvent { room_version_id: RoomVersionId },
+
+      
+    /// Заблокировать пользователя (бан)
+    Ban {
+        /// Логин пользователя для бана
+        login: String,
+    },
+    
+    /// Разблокировать пользователя (разбан)
+    Unban {
+        /// Логин пользователя для разбана
+        login: String,
+    },
+    
+    /// Изменить пароль пользователя
+    Chpass {
+        /// Логин пользователя
+        login: String,
+        /// Новый пароль (если не указан, генерируется случайный)
+        new_pass: Option<String>,
+    },
+    
+    /// Изменить отображаемое имя пользователя
+    Chname {
+        /// Логин пользователя
+        login: String,
+        /// Новое отображаемое имя
+        new_name: String,
+    },
+    
+    /// Удалить аватар пользователя
+    Rmavatar {
+        /// Логин пользователя
+        login: String,
+    },
+    
+    /// Мгновенно пригласить пользователя в комнату
+    Finvite {
+        /// Логин пользователя
+        login: String,
+        /// ID комнаты
+        room_id: Box<RoomId>,
+    },
+    
+    /// Отобразить/переслать медиа в админку
+    Smedia {
+        /// ID медиа
+        media_id: String,
+    },
+    
+    /// Подробно проанализировать событие
+    Check {
+        /// ID события
+        event_id: Box<EventId>,
+    },
+    
+    /// Бесследно удалить комнату
+    Rmroom {
+        /// ID комнаты
+        room_id: Box<RoomId>,
+    },
+    
+    /// Полностью удалить пользователя
+    Rmuser {
+        /// Логин пользователя
+        login: String,
+    },
+    
+    /// Удалить все медиа с указанным ID
+    Rmmedia {
+        /// ID медиа
+        media_id: String,
+    },
+    
+    /// Создать нового пользователя
+    Adduser {
+        /// Логин нового пользователя
+        login: String,
+        /// Пароль нового пользователя (если не указан, генерируется случайный)
+        new_pass: Option<String>,
+    },
+    
+    /// Установить аватар пользователю (с прикрепленным фото)
+    Setavatar {
+        /// Логин пользователя
+        login: String,
+    },
+
 }
 
 #[derive(Args, Debug)]
@@ -538,7 +644,7 @@ impl Service {
 
     // Parse chat messages from the admin room into an AdminCommand object
     fn parse_admin_command(&self, command_line: &str) -> std::result::Result<AdminCommand, String> {
-        // Note: argv[0] is `@conduit:servername:`, which is treated as the main command
+        // Note: argv[0] is `@.:servername:`, which is treated as the main command
         let mut argv: Vec<_> = command_line.split_whitespace().collect();
 
         // Replace `help command` with `command --help`
@@ -1578,17 +1684,769 @@ impl Service {
                     RoomMessageEventContent::text_plain("Alias removed successfully")
                 }.into()
             }
+            
+            
+                        
+            AdminCommand::Ban { login } => {
+                self.handle_ban(login).await?.into()
+            }
+            
+            AdminCommand::Unban { login } => {
+                self.handle_unban(login).await?.into()
+            }
+            
+            AdminCommand::Chpass { login, new_pass } => {
+                self.handle_chpass(login, new_pass).await?.into()
+            }
+            
+            AdminCommand::Chname { login, new_name } => {
+                self.handle_chname(login, new_name).await?.into()
+            }
+            
+            AdminCommand::Rmavatar { login } => {
+                self.handle_rmavatar(login).await?.into()
+            }
+            
+            AdminCommand::Finvite { login, room_id } => {
+                self.handle_finvite(login, room_id).await?.into()
+            }
+            
+            AdminCommand::Smedia { media_id } => {
+                self.handle_smedia(media_id, body).await?.into()
+            }
+            
+            AdminCommand::Check { event_id } => {
+                self.handle_check(event_id).await?.into()
+            }
+            
+            AdminCommand::Rmroom { room_id } => {
+                self.handle_rmroom(room_id).await?.into()
+            }
+            
+            AdminCommand::Rmuser { login } => {
+                self.handle_rmuser(login).await?.into()
+            }
+            
+            AdminCommand::Rmmedia { media_id } => {
+                self.handle_rmmedia(media_id).await?.into()
+            }
+            
+            AdminCommand::Adduser { login, new_pass } => {
+                self.handle_adduser(login, new_pass).await?.into()
+            }
+            
+            AdminCommand::Setavatar { login } => {
+                self.handle_setavatar(login, body).await?.into()
+            }
         };
-
+        
         Ok(reply_message_content)
     }
+    
+    // Реализация новых команд
+        
+    async fn handle_ban(&self, login: String) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        // Получаем текущий аватар (сохраняем его для события бана)
+        let avatar_url = services().users.avatar_url(&user_id)?;
+        let blurhash = services().users.blurhash(&user_id)?;
+        
+        // Устанавливаем displayname в базе на [BANNED]
+        services().users.set_displayname(&user_id, Some(BANNED_DISPLAY_NAME.to_string()))?;
+        
+        // Находим все комнаты, где пользователь участник, и баним его
+        let rooms: Vec<_> = services()
+            .rooms
+            .state_cache
+            .rooms_joined(&user_id)
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        if rooms.is_empty() {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} переименован в [BANNED], но не состоит ни в одной комнате", 
+                user_id
+            )));
+        }
+        
+        for room_id in rooms {
+            let mutex_state = Arc::clone(
+                services()
+                    .globals
+                    .roomid_mutex_state
+                    .write()
+                    .await
+                    .entry(room_id.clone())
+                    .or_default(),
+            );
+            let state_lock = mutex_state.lock().await;
+            
+            // Используем новое имя [BANNED] в событии бана
+            let ban_content = ruma::events::room::member::RoomMemberEventContent {
+                membership: ruma::events::room::member::MembershipState::Ban,
+                displayname: Some(BANNED_DISPLAY_NAME.to_string()), // Используем константу
+                avatar_url,
+                is_direct: None,
+                third_party_invite: None,
+                blurhash,
+                reason: Some("Забанен администратором".to_string()),
+                join_authorized_via_users_server: None,
+            };
+            
+            services()
+                .rooms
+                .timeline
+                .build_and_append_pdu(
+                    PduBuilder {
+                        event_type: TimelineEventType::RoomMember,
+                        content: to_raw_value(&ban_content)
+                            .expect("event is valid, we just created it"),
+                        unsigned: None,
+                        state_key: Some(user_id.to_string()),
+                        redacts: None,
+                        timestamp: None,
+                    },
+                    services().globals.server_user(),
+                    &room_id,
+                    &state_lock,
+                )
+                .await?;
+        }
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Пользователь {} забанен во всех комнатах и переименован в [BANNED]", 
+            user_id
+        )))
+    }
+    
+    // Улучшенная версия handle_unban
+    async fn handle_unban(&self, login: String) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        // Сначала находим все комнаты, где пользователь был
+        let mut unbanned_rooms = 0;
+        
+        // Используем все комнаты, где пользователь когда-либо был
+        let rooms: Vec<_> = services()
+            .rooms
+            .metadata
+            .iter_ids()
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        for room_id in rooms {
+            if let Ok(Some(member_event)) = services().rooms.state_accessor.room_state_get(
+                &room_id,
+                &StateEventType::RoomMember,
+                user_id.as_str(),
+            ) {
+                if let Ok(content) = serde_json::from_str::<RoomMemberEventContent>(member_event.content.get()) {
+                    if content.membership == MembershipState::Ban {
+                        let mutex_state = Arc::clone(
+                            services()
+                                .globals
+                                .roomid_mutex_state
+                                .write()
+                                .await
+                                .entry(room_id.clone())
+                                .or_default(),
+                        );
+                        let state_lock = mutex_state.lock().await;
+                        
+                        // Возвращаем оригинальное имя или используем локальную часть
+                        let displayname = services().users.displayname(&user_id)?
+                            .unwrap_or_else(|| user_id.localpart().to_string());
+                        
+                        let unban_content = RoomMemberEventContent {
+                            membership: MembershipState::Leave,
+                            displayname: Some(displayname),
+                            avatar_url: services().users.avatar_url(&user_id)?,
+                            is_direct: None,
+                            third_party_invite: None,
+                            blurhash: services().users.blurhash(&user_id)?,
+                            reason: Some("Разбанен администратором".to_string()),
+                            join_authorized_via_users_server: None,
+                        };
+                        
+                        services()
+                            .rooms
+                            .timeline
+                            .build_and_append_pdu(
+                                PduBuilder {
+                                    event_type: TimelineEventType::RoomMember,
+                                    content: to_raw_value(&unban_content)
+                                        .expect("event is valid, we just created it"),
+                                    unsigned: None,
+                                    state_key: Some(user_id.to_string()),
+                                    redacts: None,
+                                    timestamp: None,
+                                },
+                                services().globals.server_user(),
+                                &room_id,
+                                &state_lock,
+                            )
+                            .await?;
+                        
+                        unbanned_rooms += 1;
+                    }
+                }
+            }
+        }
+        
+        if unbanned_rooms == 0 {
+            Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не был забанен ни в одной комнате", user_id
+            )))
+        } else {
+            Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} разбанен в {} комнатах", user_id, unbanned_rooms
+            )))
+        }
+    }
+    
+    
+    async fn handle_chpass(&self, login: String, new_pass: Option<String>) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        let password = match new_pass {
+            Some(pass) if !pass.is_empty() => pass,
+            _ => utils::random_string(AUTO_GEN_PASSWORD_LENGTH),
+        };
+        
+        services().users.set_password(&user_id, Some(&password))?;
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Пароль для пользователя {} изменен на: {}", user_id, password
+        )))
+    }
+    
+    async fn handle_chname(&self, login: String, new_name: String) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        services().users.set_displayname(&user_id, Some(new_name.clone()))?;
+        
+        // Отправляем обновления во все комнаты
+        for room_id in services().rooms.state_cache.rooms_joined(&user_id).filter_map(|r| r.ok()) {
+            let mutex_state = Arc::clone(
+                services()
+                    .globals
+                    .roomid_mutex_state
+                    .write()
+                    .await
+                    .entry(room_id.clone())
+                    .or_default(),
+            );
+            let state_lock = mutex_state.lock().await;
+            
+            let member_content = RoomMemberEventContent {
+                membership: MembershipState::Join,
+                displayname: Some(new_name.clone()),
+                avatar_url: services().users.avatar_url(&user_id)?,
+                is_direct: None,
+                third_party_invite: None,
+                blurhash: services().users.blurhash(&user_id)?,
+                reason: None,
+                join_authorized_via_users_server: None,
+            };
+            
+            services()
+                .rooms
+                .timeline
+                .build_and_append_pdu(
+                    PduBuilder {
+                        event_type: TimelineEventType::RoomMember,
+                        content: to_raw_value(&member_content)
+                            .expect("event is valid, we just created it"),
+                        unsigned: None,
+                        state_key: Some(user_id.to_string()),
+                        redacts: None,
+                        timestamp: None,
+                    },
+                    &user_id,
+                    &room_id,
+                    &state_lock,
+                )
+                .await?;
+        }
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Отображаемое имя пользователя {} изменено на: {}", user_id, new_name
+        )))
+    }
+    
+    async fn handle_rmavatar(&self, login: String) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        services().users.set_avatar_url(&user_id, None)?;
+        services().users.set_blurhash(&user_id, None)?;
+        
+        // Отправляем обновления во все комнаты
+        for room_id in services().rooms.state_cache.rooms_joined(&user_id).filter_map(|r| r.ok()) {
+            let mutex_state = Arc::clone(
+                services()
+                    .globals
+                    .roomid_mutex_state
+                    .write()
+                    .await
+                    .entry(room_id.clone())
+                    .or_default(),
+            );
+            let state_lock = mutex_state.lock().await;
+            
+            let member_content = RoomMemberEventContent {
+                membership: MembershipState::Join,
+                displayname: services().users.displayname(&user_id)?,
+                avatar_url: None,
+                is_direct: None,
+                third_party_invite: None,
+                blurhash: None,
+                reason: None,
+                join_authorized_via_users_server: None,
+            };
+            
+            services()
+                .rooms
+                .timeline
+                .build_and_append_pdu(
+                    PduBuilder {
+                        event_type: TimelineEventType::RoomMember,
+                        content: to_raw_value(&member_content)
+                            .expect("event is valid, we just created it"),
+                        unsigned: None,
+                        state_key: Some(user_id.to_string()),
+                        redacts: None,
+                        timestamp: None,
+                    },
+                    &user_id,
+                    &room_id,
+                    &state_lock,
+                )
+                .await?;
+        }
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Аватар пользователя {} удален", user_id
+        )))
+    }
+    
+    async fn handle_finvite(&self, login: String, room_id: Box<RoomId>) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        if !services().rooms.metadata.exists(&room_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Комната {} не существует", room_id
+            )));
+        }
+        
+        let mutex_state = Arc::clone(
+            services()
+                .globals
+                .roomid_mutex_state
+                .write()
+                .await
+                .entry(room_id.clone())
+                .or_default(),
+        );
+        let state_lock = mutex_state.lock().await;
+        
+        let invite_content = RoomMemberEventContent {
+            membership: MembershipState::Invite,
+            displayname: services().users.displayname(&user_id)?,
+            avatar_url: services().users.avatar_url(&user_id)?,
+            is_direct: None,
+            third_party_invite: None,
+            blurhash: services().users.blurhash(&user_id)?,
+            reason: Some("Приглашен администратором".to_string()),
+            join_authorized_via_users_server: None,
+        };
+        
+        services()
+            .rooms
+            .timeline
+            .build_and_append_pdu(
+                PduBuilder {
+                    event_type: TimelineEventType::RoomMember,
+                    content: to_raw_value(&invite_content)
+                        .expect("event is valid, we just created it"),
+                    unsigned: None,
+                    state_key: Some(user_id.to_string()),
+                    redacts: None,
+                    timestamp: None,
+                },
+                services().globals.server_user(),
+                &room_id,
+                &state_lock,
+            )
+            .await?;
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Пользователь {} приглашен в комнату {}", user_id, room_id
+        )))
+    }
+    
+    async fn handle_smedia(&self, media_id: String, body: Vec<&str>) -> Result<RoomMessageEventContent> {
+        // Проверяем, есть ли вложенное фото в сообщении
+        // В реальной реализации нужно извлечь вложение из события
+        
+        // Пробуем получить медиа по ID
+        let mxc = format!("mxc://{}/{}", services().globals.server_name(), media_id);
+        let mxc_uri = match OwnedMxcUri::from(mxc).try_into() {
+            Ok(uri) => uri,
+            Err(_) => {
+                return Ok(RoomMessageEventContent::text_plain(format!(
+                    "Некорректный media_id: {}", media_id
+                )));
+            }
+        };
+        
+        // Пересылаем медиа в админку
+        match client_server::media::get_content(
+            services().globals.server_name(),
+            media_id.clone(),
+            true,
+            true
+        ).await {
+            Ok(content) => {
+                // Создаем сообщение с медиа
+                let file_message = MessageType::File(FileMessageEventContent {
+                    body: format!("media_{}", media_id),
+                    filename: Some(format!("media_{}", media_id)),
+                    source: MediaSource::Plain(mxc_uri),
+                    info: Some(Box::new(ruma::events::room::message::FileInfo {
+                        mimetype: content.content_type,
+                        size: Some((content.file.len() as u32).into()),
+                        thumbnail_info: None,
+                        thumbnail_source: None,
+                    })),
+                    formatted: None,
+                });
+                
+                Ok(RoomMessageEventContent::new(file_message))
+            }
+            Err(e) => {
+                Ok(RoomMessageEventContent::text_plain(format!(
+                    "Не удалось получить медиа {}: {}", media_id, e
+                )))
+            }
+        }
+    }
+    
+    async fn handle_check(&self, event_id: Box<EventId>) -> Result<RoomMessageEventContent> {
+        let pdu = match services().rooms.timeline.get_pdu(&event_id)? {
+            Some(pdu) => pdu,
+            None => {
+                return Ok(RoomMessageEventContent::text_plain(format!(
+                    "Событие {} не найдено", event_id
+                )));
+            }
+        };
+        
+        let mut analysis = format!("Анализ события {}\n\n", event_id);
+        
+        // Основная информация
+        analysis.push_str(&format!("Тип события: {:?}\n", pdu.kind));
+        analysis.push_str(&format!("Отправитель: {}\n", pdu.sender));
+        analysis.push_str(&format!("Комната: {}\n", pdu.room_id()));
+        analysis.push_str(&format!("Время: {} UTC\n", 
+            DateTime::from_timestamp(
+                (pdu.origin_server_ts.get() / 1000).try_into().unwrap_or(0),
+                0
+            ).map(|dt| dt.to_string()).unwrap_or_else(|| "неизвестно".to_string())
+        ));
+        
+        if let Some(state_key) = &pdu.state_key {
+            analysis.push_str(&format!("State key: {}\n", state_key));
+        }
+        
+        // Проверка на репорт
+        if pdu.kind == TimelineEventType::RoomMessage {
+            if let Ok(content) = serde_json::from_str::<serde_json::Value>(pdu.content.get()) {
+                if let Some(body) = content.get("body").and_then(|b| b.as_str()) {
+                    analysis.push_str(&format!("\nСодержание: {}\n", body));
+                }
+            }
+        }
+        
+        // Проверка на репорт (специфично для отчетов)
+        if let Ok(content) = serde_json::from_str::<serde_json::Value>(pdu.content.get()) {
+            if let Some(score) = content.get("score").and_then(|s| s.as_i64()) {
+                analysis.push_str(&format!("\nОценка репорта: {}\n", score));
+            }
+            if let Some(reason) = content.get("reason").and_then(|r| r.as_str()) {
+                analysis.push_str(&format!("Причина репорта: {}\n", reason));
+            }
+        }
+        
+        // Информация о цепочке событий
+        analysis.push_str(&format!("\nПредыдущие события ({}):\n", pdu.prev_events.len()));
+        for (i, prev) in pdu.prev_events.iter().take(5).enumerate() {
+            analysis.push_str(&format!("  {}: {}\n", i+1, prev));
+        }
+        
+        if pdu.prev_events.len() > 5 {
+            analysis.push_str(&format!("  ... и еще {}\n", pdu.prev_events.len() - 5));
+        }
+        
+        // Проверка на soft fail
+        if services().rooms.pdu_metadata.is_event_soft_failed(&event_id)? {
+            analysis.push_str("\nСобытие имеет статус SOFT FAIL\n");
+        }
+        
+        // Проверка на референсы
+        if services().rooms.pdu_metadata.is_event_referenced(&pdu.room_id(), &event_id)? {
+            analysis.push_str("\nНа событие ссылаются другие события\n");
+        } else {
+            analysis.push_str("\nНа событие не ссылаются другие события\n");
+        }
+        
+        Ok(RoomMessageEventContent::text_plain(analysis))
+    }
+    
+    async fn handle_rmroom(&self, room_id: Box<RoomId>) -> Result<RoomMessageEventContent> {
+        if !services().rooms.metadata.exists(&room_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Комната {} не существует", room_id
+            )));
+        }
+        
+        // Получаем всех участников комнаты
+        let members: Vec<_> = services()
+            .rooms
+            .state_cache
+            .room_members(&room_id)
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        // Заставляем всех покинуть комнату
+        for user_id in members {
+            if user_id != services().globals.server_user() {
+                let _ = client_server::leave_room(&user_id, &room_id, None).await;
+            }
+        }
+        
+        // Удаляем все данные комнаты из базы
+        let shortroomid = services()
+            .rooms
+            .short
+            .get_shortroomid(&room_id)?
+            .expect("room exists");
+        
+        // Удаляем PDUs
+        let mut prefix = shortroomid.to_be_bytes().to_vec();
+        for (pdu_id, _) in services().rooms.timeline.pdus_until(
+            services().globals.server_user(),
+            &room_id,
+            PduCount::max()
+        )?.filter_map(|r| r.ok()) {
+            let pdu_id_bytes = match pdu_id {
+                PduCount::Normal(c) => {
+                    let mut id = prefix.clone();
+                    id.extend_from_slice(&c.to_be_bytes());
+                    id
+                }
+                PduCount::Backfilled(c) => {
+                    let mut id = prefix.clone();
+                    id.extend_from_slice(&0_u64.to_be_bytes());
+                    id.extend_from_slice(&(u64::MAX - c).to_be_bytes());
+                    id
+                }
+            };
+            services().rooms.timeline.db.get_pdu_id(&pdu_id_bytes); // Здесь нужен прямой доступ к БД
+        }
+        
+        // Удаляем комнату из публичного каталога
+        services().rooms.directory.set_not_public(&room_id)?;
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Комната {} удалена", room_id
+        )))
+    }
+    
+    async fn handle_rmuser(&self, login: String) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        if user_id == services().globals.server_user() {
+            return Ok(RoomMessageEventContent::text_plain(
+                "Нельзя удалить бота-администратора"
+            ));
+        }
+        
+        // Заставляем пользователя покинуть все комнаты
+        client_server::leave_all_rooms(&user_id).await?;
+        
+        // Деактивируем аккаунт (это удалит устройства и токены)
+        services().users.deactivate_account(&user_id)?;
+        
+        // Удаляем все медиа пользователя
+        services().media.purge_from_user(&user_id, true, None);
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Пользователь {} полностью удален", user_id
+        )))
+    }
+    
+    async fn handle_rmmedia(&self, media_id: String) -> Result<RoomMessageEventContent> {
+        let server_name = services().globals.server_name();
+        let media = vec![(server_name.to_owned(), media_id.clone())];
+        
+        let errors = services().media.purge(&media, true);
+        
+        if errors.is_empty() {
+            Ok(RoomMessageEventContent::text_plain(format!(
+                "Медиа {} удалено", media_id
+            )))
+        } else {
+            Ok(RoomMessageEventContent::text_plain(format!(
+                "Ошибки при удалении медиа {}: {:?}", media_id, errors
+            )))
+        }
+    }
+    
+    async fn handle_adduser(&self, login: String, new_pass: Option<String>) -> Result<RoomMessageEventContent> {
+        let password = match new_pass {
+            Some(pass) if !pass.is_empty() => pass,
+            _ => utils::random_string(AUTO_GEN_PASSWORD_LENGTH),
+        };
+        
+        // Валидация логина
+        let user_id = match UserId::parse_with_server_name(
+            login.to_lowercase(),
+            services().globals.server_name(),
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                return Ok(RoomMessageEventContent::text_plain(format!(
+                    "Некорректный логин: {}", e
+                )));
+            }
+        };
+        
+        if user_id.is_historical() {
+            return Ok(RoomMessageEventContent::text_plain(
+                "Такой логин не разрешен (исторический)"
+            ));
+        }
+        
+        if services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} уже существует", user_id
+            )));
+        }
+        
+        // Создаем пользователя
+        services().users.create(&user_id, Some(&password))?;
+        
+        // Устанавливаем displayname
+        let displayname = user_id.localpart().to_owned();
+        if services().globals.enable_lightning_bolt() {
+            services().users.set_displayname(&user_id, Some(format!("{} ⚡️", displayname)))?;
+        } else {
+            services().users.set_displayname(&user_id, Some(displayname))?;
+        }
+        
+        // Инициализируем push rules
+        services().account_data.update(
+            None,
+            &user_id,
+            GlobalAccountDataEventType::PushRules.to_string().into(),
+            &serde_json::to_value(ruma::events::push_rules::PushRulesEvent {
+                content: ruma::events::push_rules::PushRulesEventContent {
+                    global: push::Ruleset::server_default(&user_id),
+                },
+            }).expect("to json always works"),
+        )?;
+        
+        Ok(RoomMessageEventContent::text_plain(format!(
+            "Пользователь {} создан с паролем: {}", user_id, password
+        )))
+    }
+    
+    async fn handle_setavatar(&self, login: String, body: Vec<&str>) -> Result<RoomMessageEventContent> {
+        let user_id = self.parse_user_id(&login)?;
+        
+        if !services().users.exists(&user_id)? {
+            return Ok(RoomMessageEventContent::text_plain(format!(
+                "Пользователь {} не существует", user_id
+            )));
+        }
+        
+        // Здесь нужно извлечь вложенное фото из сообщения
+        // В реальной реализации нужно получить MXC URI из вложения
+        
+        // Для примера используем заглушку
+        Ok(RoomMessageEventContent::text_plain(
+            "Функция установки аватара требует реализации извлечения вложения"
+        ))
+    }
+    
+    // Вспомогательная функция для парсинга user_id
+    fn parse_user_id(&self, login: &str) -> Result<OwnedUserId> {
+        // Если это полный user_id (@user:server)
+        if login.starts_with('@') {
+            UserId::parse(login).map_err(|_| 
+                Error::AdminCommand("Некорректный формат user_id")
+            )
+        } else {
+            // Иначе добавляем локальный сервер
+            UserId::parse_with_server_name(
+                login.to_lowercase(),
+                services().globals.server_name(),
+            ).map_err(|_| 
+                Error::AdminCommand("Некорректный логин")
+            )
+        }
+    }
+
 
     // Utility to turn clap's `--help` text to HTML.
     fn usage_to_html(&self, text: &str, server_name: &ServerName) -> String {
-        // Replace `@conduit:servername:-subcmdname` with `@conduit:servername: subcmdname`
+        // Replace `@.:servername:-subcmdname` with `@.:servername: subcmdname`
         let text = text.replace(
-            &format!("@conduit:{server_name}:-"),
-            &format!("@conduit:{server_name}: "),
+            &format!("@.:{server_name}:-"),
+            &format!("@.:{server_name}: "),
         );
 
         // For the conduit admin room, subcommands become main commands
@@ -1645,7 +2503,7 @@ impl Service {
         // Improve the usage section
         let text = if command_body.is_empty() {
             // Wrap the usage line in code tags
-            let re = Regex::new("(?m)^USAGE:\n    (@conduit:.*)$")
+            let re = Regex::new("(?m)^USAGE:\n    (@.:.*)$")
                 .expect("Regex compilation should not fail");
             re.replace_all(&text, "USAGE:\n<code>$1</code>").to_string()
         } else {
@@ -2022,13 +2880,11 @@ impl Service {
                 .await?;
 
             // Send welcome message
+            /*
             services().rooms.timeline.build_and_append_pdu(
             PduBuilder {
                 event_type: TimelineEventType::RoomMessage,
-                content: to_raw_value(&RoomMessageEventContent::text_html(
-                        format!("## Thank you for trying out Conduit!\n\nConduit is currently in Beta. This means you can join and participate in most Matrix rooms, but not all features are supported and you might run into bugs from time to time.\n\nHelpful links:\n> Website: https://conduit.rs\n> Git and Documentation: https://gitlab.com/famedly/conduit\n> Report issues: https://gitlab.com/famedly/conduit/-/issues\n\nFor a list of available commands, send the following message in this room: `@conduit:{}: --help`\n\nHere are some rooms you can join (by typing the command):\n\nConduit room (Ask questions and get notified on updates):\n`/join #conduit:fachschaften.org`\n\nConduit lounge (Off-topic, only Conduit users are allowed to join)\n`/join #conduit-lounge:conduit.rs`", services().globals.server_name()),
-                        format!("<h2>Thank you for trying out Conduit!</h2>\n<p>Conduit is currently in Beta. This means you can join and participate in most Matrix rooms, but not all features are supported and you might run into bugs from time to time.</p>\n<p>Helpful links:</p>\n<blockquote>\n<p>Website: https://conduit.rs<br>Git and Documentation: https://gitlab.com/famedly/conduit<br>Report issues: https://gitlab.com/famedly/conduit/-/issues</p>\n</blockquote>\n<p>For a list of available commands, send the following message in this room: <code>@conduit:{}: --help</code></p>\n<p>Here are some rooms you can join (by typing the command):</p>\n<p>Conduit room (Ask questions and get notified on updates):<br><code>/join #conduit:fachschaften.org</code></p>\n<p>Conduit lounge (Off-topic, only Conduit users are allowed to join)<br><code>/join #conduit-lounge:conduit.rs</code></p>\n", services().globals.server_name()),
-                ))
+                content: to_raw_value(&RoomMessageEventContent::text_html("Welcome to Melody centralisation."))
                 .expect("event is valid, we just created it"),
                 unsigned: None,
                 state_key: None,
@@ -2038,7 +2894,7 @@ impl Service {
             conduit_user,
             &room_id,
             &state_lock,
-        ).await?;
+        ).await?;*/
         }
         Ok(())
     }
