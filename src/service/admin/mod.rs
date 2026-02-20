@@ -1,17 +1,6 @@
 // Modified by github.com/INTeDest, 2026 // Licensed under Apache 2.0
-use ruma::{
-    push::{self, Ruleset},
-    events::{
-        GlobalAccountDataEventType,
-        room::{
-            member::RoomMemberEventContent,
-            message::FileMessageEventContent,
-        },
-    },
-    OwnedMxcUri,
-    uint,
-};
 use crate::service::rooms::timeline::PduCount;
+use crate::api::client_server::{self, leave_all_rooms, AUTO_GEN_PASSWORD_LENGTH};
 
 // Константа для имени забаненного пользователя
 const BANNED_DISPLAY_NAME: &str = "[BANNED]";
@@ -30,8 +19,11 @@ use clap::{Args, Parser};
 use image::GenericImageView;
 use regex::Regex;
 use ruma::{
+    push,
     api::appservice::Registration,
     events::{
+        StateEventType,
+        GlobalAccountDataEventType,
         room::{
             canonical_alias::RoomCanonicalAliasEventContent,
             create::RoomCreateEventContent,
@@ -52,13 +44,13 @@ use ruma::{
     },
     room_version_rules::RoomVersionRules,
     EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedMxcUri, OwnedRoomAliasId, OwnedRoomId,
-    OwnedServerName, RoomAliasId, RoomId, RoomVersionId, ServerName, UserId,
+    OwnedServerName, OwnedUserId, RoomAliasId, RoomId, RoomVersionId, ServerName, UserId,
+    uint,
 };
 use serde_json::value::to_raw_value;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::{
-    api::client_server::{self, leave_all_rooms, AUTO_GEN_PASSWORD_LENGTH},
     services,
     utils::{self, HtmlEscape},
     Error, PduEvent, Result,
@@ -1783,7 +1775,7 @@ impl Service {
                     .roomid_mutex_state
                     .write()
                     .await
-                    .entry(room_id.clone())
+                    .entry(room_id.as_ref().to_owned())
                     .or_default(),
             );
             let state_lock = mutex_state.lock().await;
@@ -1861,7 +1853,7 @@ impl Service {
                                 .roomid_mutex_state
                                 .write()
                                 .await
-                                .entry(room_id.clone())
+                                .entry(room_id.as_ref().to_owned())
                                 .or_default(),
                         );
                         let state_lock = mutex_state.lock().await;
@@ -1958,7 +1950,7 @@ impl Service {
                     .roomid_mutex_state
                     .write()
                     .await
-                    .entry(room_id.clone())
+                    .entry(room_id.as_ref().to_owned())
                     .or_default(),
             );
             let state_lock = mutex_state.lock().await;
@@ -2019,7 +2011,7 @@ impl Service {
                     .roomid_mutex_state
                     .write()
                     .await
-                    .entry(room_id.clone())
+                    .entry(room_id.as_ref().to_owned())
                     .or_default(),
             );
             let state_lock = mutex_state.lock().await;
@@ -2081,7 +2073,7 @@ impl Service {
                 .roomid_mutex_state
                 .write()
                 .await
-                .entry(room_id.clone())
+                .entry(room_id.as_ref().to_owned())
                 .or_default(),
         );
         let state_lock = mutex_state.lock().await;
@@ -2121,7 +2113,7 @@ impl Service {
         )))
     }
     
-    async fn handle_smedia(&self, media_id: String, body: Vec<&str>) -> Result<RoomMessageEventContent> {
+    async fn handle_smedia(&self, media_id: String, _body: Vec<&str>) -> Result<RoomMessageEventContent> {
         // Проверяем, есть ли вложенное фото в сообщении
         // В реальной реализации нужно извлечь вложение из события
         
@@ -2186,7 +2178,7 @@ impl Service {
         analysis.push_str(&format!("Комната: {}\n", pdu.room_id()));
         analysis.push_str(&format!("Время: {} UTC\n", 
             DateTime::from_timestamp(
-                (pdu.origin_server_ts.get() / 1000).try_into().unwrap_or(0),
+                (pdu.origin_server_ts.as_u64() / 1000).try_into().unwrap_or(0),
                 0
             ).map(|dt| dt.to_string()).unwrap_or_else(|| "неизвестно".to_string())
         ));
@@ -2287,8 +2279,8 @@ impl Service {
                     id.extend_from_slice(&(u64::MAX - c).to_be_bytes());
                     id
                 }
-            };
-            services().rooms.timeline.db.get_pdu_id(&pdu_id_bytes); // Здесь нужен прямой доступ к БД
+            };// TODO
+//            services().rooms.timeline.db.get_pdu_id(&pdu_id_bytes); // Здесь нужен прямой доступ к БД
         }
         
         // Удаляем комнату из публичного каталога
