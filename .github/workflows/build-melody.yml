@@ -1,7 +1,7 @@
 name: Melody Building
 
 on:
-  push:
+  workflow_dispatch:
     inputs:
       arch:
         description: 'Архитектура для сборки'
