@@ -1,3 +1,4 @@
+// Modified by github.com/INTeDest, 2026 // Licensed under Apache 2.0
 mod data;
 pub use data::{Data, SigningKeys};
 use ruma::{
@@ -196,8 +197,8 @@ impl Service {
             allow_registration: RwLock::new(config.allow_registration),
             admin_alias: RoomAliasId::parse(format!("#admins:{}", &config.server_name))
                 .expect("#admins:server_name is a valid alias name"),
-            server_user: UserId::parse(format!("@conduit:{}", &config.server_name))
-                .expect("@conduit:server_name is valid"),
+            server_user: UserId::parse(format!("@.:{}", &config.server_name))
+                .expect("@.:server_name is valid"),
             db,
             config,
             keypair: Arc::new(keypair),
