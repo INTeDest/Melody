@@ -1,7 +1,7 @@
-name: Melody Server Compilation
+name: Melody Building
 
 on:
-  workflow_dispatch:
+  push:
     inputs:
       arch:
         description: 'Архитектура для сборки'
